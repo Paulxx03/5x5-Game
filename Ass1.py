@@ -1,9 +1,23 @@
 import json
 import random
+from datetime import datetime
 from dataclasses import dataclass
 
 import ttkbootstrap as ttk
 from ttkbootstrap.dialogs import Messagebox
+
+import pygame
+from tkinter import simpledialog
+
+
+# -------------------------
+# Sound Effects
+# -------------------------
+pygame.mixer.init()
+metal_pipe = pygame.mixer.Sound("Sounds/Metal Pipe Falling.wav")
+metal_pipe.set_volume(0.3)
+incorrect_buzzer = pygame.mixer.Sound("Sounds/Incorrect Buzzer.wav")
+incorrect_buzzer.set_volume(0.5)
 
 
 # -------------------------
@@ -20,6 +34,7 @@ CELL_FONT_INNER_L2 = ("Segoe UI", 22, "bold")
 class SaveState:
     def __init__(self, filename="SavedState.json"):
         self.filename = filename
+        self.completionsfile = "CompletedGames.json"
 
     def save_game(self, data: dict) -> None:
         with open(self.filename, "w", encoding="utf-8") as f:
@@ -31,6 +46,18 @@ class SaveState:
                 return json.load(f)
         except FileNotFoundError:
             return None
+        
+    def load_completed_games(self) -> dict:
+        try:
+            with open(self.completionsfile, "r", encoding="utf=8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {"Players": {}}
+
+    def save_completed_game(self, data:dict) -> None:
+        with open(self.completionsfile, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
 
 
 # -------------------------
@@ -41,6 +68,7 @@ class Logic:
         self.board = [[0 for _ in range(5)] for _ in range(5)]
         self.score = 0
         self.level = 1
+        self.player_name = None
 
         # Level 2 ring values (7x7, ring cells used; 0 = empty)
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
@@ -68,6 +96,9 @@ class Logic:
                 if self.board[r][c] == target:
                     return r, c
         return None
+    
+    def play_sound(self, sound):
+      sound.play()
 
     def make_move_level1(self, r: int, c: int, value: int) -> bool:
         """
@@ -94,10 +125,14 @@ class Logic:
         self.board[r][c] = value
 
         pr, pc = prev_pos
+        if abs(r - pr) != 1 or abs(c - pc) != 1:
+            return False
+
         if abs(r - pr) == 1 and abs(c - pc) == 1:
             self.score += 1
 
         return True
+
 
     def is_level1_complete(self) -> bool:
         return all(cell != 0 for row in self.board for cell in row)
@@ -134,6 +169,30 @@ class Logic:
         self.score = state["score"]
         self.level = state.get("level", 1)
         self.ring = state.get("ring", [[0 for _ in range(7)] for _ in range(7)])
+
+    def get_completion_data(self, parent) -> dict:
+
+        while not self.player_name:
+            name = simpledialog.askstring("Level Complete", "Level 1 complete!\n\nEnter your name to save your score and continue:", parent=parent)
+            if name is None:
+                Messagebox.show_warning("Name Required", "You must enter a name to continue", parent=parent)
+            else:
+                self.player_name = name.strip()
+            
+        now = datetime.now()
+        formatted_time = now.strftime("%A %m/%d/%Y %I:%M %p")
+        state = self.get_state()
+
+        completion_data = {
+            "Name" : self.player_name,
+            "Time" : formatted_time,
+            "Game Level" : state["level"],
+            "Score" : state["score"],
+            "Board" : state["board"],
+            "Ring" : state["ring"]
+        }
+
+        return completion_data
 
 
 # -------------------------
@@ -428,7 +487,10 @@ class InterfaceGUI:
         if self.logic.level == 1 and self.selected.area == "inner":
             ok = self.logic.make_move_level1(self.selected.r, self.selected.c, value)
             if not ok:
-                Messagebox.show_error("Invalid placement. Game over.", "Game Over")
+                self.logic.play_sound(metal_pipe)
+                #self.logic.play_sound(incorrect_buzzer)
+                Messagebox.show_info("Invalid placement. Game over.", "Game Over", parent=self.app)
+
                 self.new_game_level1()
                 return
 
@@ -438,9 +500,13 @@ class InterfaceGUI:
             self.value_entry.focus_set()
 
             if self.logic.is_level1_complete():
-                Messagebox.show_info("Level 1 complete! Level 2 ring unlocked.", "Level Complete")
+                completion = self.logic.get_completion_data(parent=self.app)
+                save_data = self.save_state.load_completed_games()
+                save_data.setdefault("Players", {})
+                save_data["Players"].setdefault(completion["Name"], [])
+                save_data["Players"][completion["Name"]].append(completion)
+                self.save_state.save_completed_game(save_data)
                 self.start_level2_ui_only()
-
             return
 
         # Level 2 ring placement (UI-only)
@@ -543,4 +609,5 @@ class InterfaceGUI:
 
 if __name__ == "__main__":
     InterfaceGUI().run()
+
 
