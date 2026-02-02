@@ -1,13 +1,8 @@
 # 5x5-Game
-CEN 4020 Project 1
+CEN 4020 – Project 1
 
+This project is a graphical, grid-based game developed for CEN 4020. The game features a GUI-based interface that allows players to interactively fill a 5×5 grid across two distinct levels. In the first level, players complete the 5×5 grid, while the second level expands the challenge by requiring players to fill the outer ring surrounding the original 5×5 grid, forming the border of a 7×7 grid. Players must place numbers consecutively, and points are awarded only when a number is placed diagonally adjacent to the previously placed number.
 
-This project is a simple game that allows users to fill in a 5x5 grid
-with the constraints that numbers must be placed consecutively and in order
-to get points the number must be placed diagonal to the previous one.
+The program is implemented in Python and is organized into three main objects: SaveState, Logic, and Interface. Each object is responsible for handling its respective component of the application, including game rules, user interaction, and saving completed game data. The project was developed and tested on the Windows operating system using Python version 3.12.
 
-The code is made up of three objects: SaveState, Logic, and Interface which handle their respective
-components
-This was done in Python version 3.14.0 on the Windows operating system
-
-The command to compile this program is "python Ass1.py"
+To run the program, navigate to the project directory and execute the following command: py -3.12 Ass1.py
