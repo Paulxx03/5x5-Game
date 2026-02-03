@@ -84,11 +84,42 @@ class Logic:
         c = random.randint(0, 4)
         self.board[r][c] = 1
 
+    def clear_level1_keep_one(self) -> None:
+        """Clear board but keep 1 in its current cell."""
+        pos = self.find_position(1)
+        self.board = [[0 for _ in range(5)] for _ in range(5)]
+        self.score = 0
+        self.level = 1
+        self.ring = [[0 for _ in range(7)] for _ in range(7)]
+
+        if pos is None:
+            r = random.randint(0, 4)
+            c = random.randint(0, 4)
+        else:
+            r, c = pos
+        self.board[r][c] = 1
+
+    def clear_level1_random_one(self) -> None:
+        """Clear board and place 1 randomly."""
+        self.board = [[0 for _ in range(5)] for _ in range(5)]
+        self.score = 0
+        self.level = 1
+        self.ring = [[0 for _ in range(7)] for _ in range(7)]
+
+        r = random.randint(0, 4)
+        c = random.randint(0, 4)
+        self.board[r][c] = 1
+
     def get_cell(self, r: int, c: int) -> int:
         return self.board[r][c]
 
     def previous_input(self) -> int:
         return max(max(row) for row in self.board)
+
+    def get_next_number(self) -> int:
+        board_max = max(max(row) for row in self.board)
+        ring_max = max(max(row) for row in self.ring)
+        return max(board_max, ring_max) + 1
 
     def find_position(self, target: int) -> tuple[int, int] | None:
         for r in range(5):
@@ -155,6 +186,9 @@ class Logic:
             return False
         self.ring[r][c] = value
         return True
+
+    def clear_ring(self) -> None:
+        self.ring = [[0 for _ in range(7)] for _ in range(7)]
 
     def get_state(self) -> dict:
         return {
@@ -395,21 +429,26 @@ class InterfaceGUI:
         )
         self.next_number_label.grid(row=8, column=0, sticky="w", pady=(0, 14))
 
-        ttk.Separator(self.panel_card).grid(row=9, column=0, sticky="ew", pady=10)
+        self.clear_btn = ttk.Button(
+            self.panel_card, text="Clear Board", bootstyle="warning", command=self.on_clear_board
+        )
+        self.clear_btn.grid(row=9, column=0, sticky="ew", pady=(0, 8))
+
+        ttk.Separator(self.panel_card).grid(row=10, column=0, sticky="ew", pady=10)
 
         self.new_btn = ttk.Button(
             self.panel_card, text="New Game (Level 1)", bootstyle="success", command=self.new_game_level1
         )
-        self.new_btn.grid(row=10, column=0, sticky="ew", pady=4)
+        self.new_btn.grid(row=11, column=0, sticky="ew", pady=4)
 
         self.save_btn = ttk.Button(self.panel_card, text="Save", bootstyle="secondary", command=self.on_save)
-        self.save_btn.grid(row=11, column=0, sticky="ew", pady=4)
+        self.save_btn.grid(row=12, column=0, sticky="ew", pady=4)
 
         self.load_btn = ttk.Button(self.panel_card, text="Load", bootstyle="secondary", command=self.on_load)
-        self.load_btn.grid(row=12, column=0, sticky="ew", pady=4)
+        self.load_btn.grid(row=13, column=0, sticky="ew", pady=4)
 
         self.exit_btn = ttk.Button(self.panel_card, text="Exit", bootstyle="danger", command=self.app.destroy)
-        self.exit_btn.grid(row=13, column=0, sticky="ew", pady=(16, 0))
+        self.exit_btn.grid(row=14, column=0, sticky="ew", pady=(16, 0))
 
     # ---------- Input handlers ----------
     def on_enter_pressed(self, event):
@@ -444,8 +483,32 @@ class InterfaceGUI:
         self.logic.reset_new_game_level1()
         self.selected = None
         self.value_var.set("")
-        self.next_number_label.config(text="—")
         self.board_card.config(text="Board (Level 1)")
+        self._refresh_board()
+        self._refresh_panel()
+
+    def on_clear_board(self) -> None:
+        if self.logic.level == 2:
+            self.logic.clear_ring()
+            self.selected = None
+            self.value_var.set("")
+            self._refresh_board()
+            self._refresh_panel()
+            return
+
+        keep_one = Messagebox.yesno(
+            "Clear board",
+            "Keep number 1 in its original cell?\n\n"
+            "Yes = keep same cell\nNo = place 1 randomly",
+            parent=self.app,
+        )
+        if keep_one:
+            self.logic.clear_level1_keep_one()
+        else:
+            self.logic.clear_level1_random_one()
+
+        self.selected = None
+        self.value_var.set("")
         self._refresh_board()
         self._refresh_panel()
 
@@ -483,17 +546,27 @@ class InterfaceGUI:
             Messagebox.show_warning("Please enter a whole number.", "Invalid input")
             return
 
+        expected = self.logic.get_next_number()
+        if value != expected:
+            self.logic.play_sound(incorrect_buzzer)
+            Messagebox.show_warning(
+                f"Next number must be {expected}.",
+                "Invalid number",
+                parent=self.app,
+            )
+            self.value_entry.focus_set()
+            return
+
         # Level 1 placement
         if self.logic.level == 1 and self.selected.area == "inner":
             ok = self.logic.make_move_level1(self.selected.r, self.selected.c, value)
             if not ok:
-                self.logic.play_sound(metal_pipe)
-                #self.logic.play_sound(incorrect_buzzer)
-                Messagebox.show_info("Invalid placement. Game over.", "Game Over", parent=self.app)
-
-                self.new_game_level1()
+                self.logic.play_sound(incorrect_buzzer)
+                Messagebox.show_warning("Invalid placement. Try another cell.", "Invalid placement", parent=self.app)
+                self.value_entry.focus_set()
                 return
 
+            self.logic.play_sound(metal_pipe)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
@@ -513,15 +586,18 @@ class InterfaceGUI:
         if self.logic.level == 2 and self.selected.area == "ring":
             ok = self.logic.place_on_ring_ui_only(self.selected.r, self.selected.c, value)
             if not ok:
+                self.logic.play_sound(incorrect_buzzer)
                 Messagebox.show_warning("Pick an empty yellow ring cell.", "Invalid ring placement")
                 return
 
+            self.logic.play_sound(metal_pipe)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
             self.value_entry.focus_set()
             return
 
+        self.logic.play_sound(incorrect_buzzer)
         Messagebox.show_warning("Select a valid cell for the current level.", "Wrong cell")
 
     def on_save(self) -> None:
@@ -537,7 +613,6 @@ class InterfaceGUI:
         self.logic.set_state(data)
         self.selected = None
         self.value_var.set("")
-        self.next_number_label.config(text="—")
 
         # If loaded Level 1 is complete, auto-advance
         if self.logic.level == 1 and self.logic.is_level1_complete():
@@ -602,6 +677,7 @@ class InterfaceGUI:
             self.selected_label.config(text=f"{self.selected.area} ({self.selected.r}, {self.selected.c})")
 
         self.score_label.config(text=str(self.logic.score))
+        self.next_number_label.config(text=str(self.logic.get_next_number()))
 
     def run(self) -> None:
         self.app.mainloop()
