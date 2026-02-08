@@ -8,6 +8,8 @@ from ttkbootstrap.dialogs import Messagebox
 
 import pygame
 from tkinter import simpledialog
+import copy
+from typing import List, Tuple
 
 
 # -------------------------
@@ -72,6 +74,24 @@ class Logic:
 
         # Level 2 ring values (7x7, ring cells used; 0 = empty)
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
+        self.move_history: List[Tuple[str, dict]] = []  # List of (action_type, state_snapshot)
+        self.MAX_UNDO_HISTORY = 50
+        self.level1_completed = False
+        self.level1_snapshot = None
+    def start_level2(self) -> None:
+        """Called when transitioning from Level 1 to Level 2"""
+        self.level1_completed = True
+        self.level1_snapshot = {
+            "board": copy.deepcopy(self.board),
+            "score": self.score,
+            "level": 1,
+            "ring": copy.deepcopy(self.ring)
+        }
+        # Clear history for Level 2
+        self.move_history.clear()
+        # Save initial Level 2 state
+        self._save_to_history("level2_initial")
+        self.level = 2  
 
     def reset_new_game_level1(self) -> None:
         """Clear board; place 1 randomly. Reset Level 2 ring too."""
@@ -79,10 +99,13 @@ class Logic:
         self.score = 0
         self.level = 1
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
-
+        self.move_history.clear()
         r = random.randint(0, 4)
         c = random.randint(0, 4)
         self.board[r][c] = 1
+        self._save_to_history("initial")
+        self.level1_completed = False
+        self.level1_snapshot = None
 
     def clear_level1_keep_one(self) -> None:
         """Clear board but keep 1 in its current cell."""
@@ -91,13 +114,16 @@ class Logic:
         self.score = 0
         self.level = 1
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
-
+        self.move_history.clear()
         if pos is None:
             r = random.randint(0, 4)
             c = random.randint(0, 4)
         else:
             r, c = pos
         self.board[r][c] = 1
+        self._save_to_history("initial")
+        self.level1_completed = False
+        self.level1_snapshot = None
 
     def clear_level1_random_one(self) -> None:
         """Clear board and place 1 randomly."""
@@ -105,10 +131,56 @@ class Logic:
         self.score = 0
         self.level = 1
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
-
+        self.move_history.clear()
         r = random.randint(0, 4)
         c = random.randint(0, 4)
         self.board[r][c] = 1
+        self._save_to_history("initial")
+        self.level1_completed = False
+        self.level1_snapshot = None
+    def _save_to_history(self, action_type: str, state_snapshot: dict = None) -> None:  # ADD state_snapshot parameter
+        """Save current state to undo history."""
+        if len(self.move_history) >= self.MAX_UNDO_HISTORY:
+            self.move_history.pop(0)  # Remove oldest if limit reached
+            
+        if state_snapshot is None:
+            # If no snapshot provided, create one of current state
+            state_snapshot = {
+                "board": copy.deepcopy(self.board),
+                "score": self.score,
+                "level": self.level,
+                "ring": copy.deepcopy(self.ring)
+            }
+        
+        self.move_history.append((action_type, state_snapshot))
+    
+    def undo_last_move(self) -> bool:
+        """Revert to previous state. Returns True if undo was successful."""
+        if self.level1_completed and self.level == 2:
+            # Check if we're at the beginning of Level 2 history
+            if len(self.move_history) <= 1:
+                return False
+        if len(self.move_history) < 2:  # Need at least initial + one move
+            return False
+            
+        # Get the PREVIOUS state (don't pop yet!)
+        action_type, prev_state = self.move_history[-2]  # Use -2 for previous state
+        
+        # Restore previous state
+        self.board = copy.deepcopy(prev_state["board"])
+        self.score = prev_state["score"]
+        self.level = prev_state["level"]
+        self.ring = copy.deepcopy(prev_state["ring"])
+        
+        # Now remove the CURRENT state from history (keep previous state)
+        self.move_history.pop()
+        
+        return True
+    
+    def can_undo(self) -> bool:
+        """Check if undo is possible."""
+        return len(self.move_history) > 1
+
 
     def get_cell(self, r: int, c: int) -> int:
         return self.board[r][c]
@@ -132,13 +204,6 @@ class Logic:
       sound.play()
 
     def make_move_level1(self, r: int, c: int, value: int) -> bool:
-        """
-        Level 1 rules:
-        - Must place next sequential number
-        - Must place in an empty cell
-        - Invalid placement ends game (handled by UI)
-        - Score +1 if diagonal to predecessor
-        """
         if not (0 <= r < 5 and 0 <= c < 5):
             return False
 
@@ -153,17 +218,24 @@ class Logic:
         if self.board[r][c] != 0:
             return False
 
+        # Make the move FIRST
         self.board[r][c] = value
 
+        # Update score if diagonal
         pr, pc = prev_pos
-        if abs(r - pr) != 1 or abs(c - pc) != 1:
-            return False
-
         if abs(r - pr) == 1 and abs(c - pc) == 1:
             self.score += 1
-
+        
+        # Save the POST-MOVE state to history
+        post_move_state = {
+            "board": copy.deepcopy(self.board),  # Board AFTER placing number
+            "score": self.score,  # Score AFTER potential increase
+            "level": self.level,
+            "ring": copy.deepcopy(self.ring)
+        }
+        self._save_to_history("move", post_move_state)  # ✅ SAVE NEW STATE
+        
         return True
-
 
     def is_level1_complete(self) -> bool:
         return all(cell != 0 for row in self.board for cell in row)
@@ -177,13 +249,23 @@ class Logic:
         return self.ring[r][c] == 0
 
     def place_on_ring_ui_only(self, r: int, c: int, value: int) -> bool:
-        """NO Level 2 rules yet. Just: ring cell + empty + store number."""
         if not (0 <= r < 7 and 0 <= c < 7):
             return False
         if not self.is_ring_cell(r, c):
             return False
         if not self.ring_cell_empty(r, c):
             return False
+        
+        # Save PRE-MOVE state
+        pre_move_state = {
+            "board": copy.deepcopy(self.board),
+            "score": self.score,
+            "level": self.level,
+            "ring": copy.deepcopy(self.ring)  # Current ring BEFORE placement
+        }
+        self._save_to_history("ring_move", pre_move_state)
+        
+        # Now place the number
         self.ring[r][c] = value
         return True
 
@@ -196,6 +278,8 @@ class Logic:
             "score": self.score,
             "level": self.level,
             "ring": self.ring,
+            "level1_completed": self.level1_completed,
+            "level1_snapshot": self.level1_snapshot
         }
 
     def set_state(self, state: dict) -> None:
@@ -203,6 +287,8 @@ class Logic:
         self.score = state["score"]
         self.level = state.get("level", 1)
         self.ring = state.get("ring", [[0 for _ in range(7)] for _ in range(7)])
+        self.level1_completed = state.get("level1_completed", False)
+        self.level1_snapshot = state.get("level1_snapshot", None)
 
     def get_completion_data(self, parent) -> dict:
 
@@ -433,23 +519,54 @@ class InterfaceGUI:
             self.panel_card, text="Clear Board", bootstyle="warning", command=self.on_clear_board
         )
         self.clear_btn.grid(row=9, column=0, sticky="ew", pady=(0, 8))
+        self.undo_btn = ttk.Button(
+            self.panel_card, 
+            text="Undo Last Move", 
+            bootstyle="info",
+            command=self.on_undo
+        )
+        self.undo_btn.grid(row=10, column=0, sticky="ew", pady=(0, 8))
+        ttk.Separator(self.panel_card).grid(row=11, column=0, sticky="ew", pady=10)
 
-        ttk.Separator(self.panel_card).grid(row=10, column=0, sticky="ew", pady=10)
+        
 
         self.new_btn = ttk.Button(
             self.panel_card, text="New Game (Level 1)", bootstyle="success", command=self.new_game_level1
         )
-        self.new_btn.grid(row=11, column=0, sticky="ew", pady=4)
+        self.new_btn.grid(row=12, column=0, sticky="ew", pady=4)
 
         self.save_btn = ttk.Button(self.panel_card, text="Save", bootstyle="secondary", command=self.on_save)
-        self.save_btn.grid(row=12, column=0, sticky="ew", pady=4)
+        self.save_btn.grid(row=13, column=0, sticky="ew", pady=4)
 
         self.load_btn = ttk.Button(self.panel_card, text="Load", bootstyle="secondary", command=self.on_load)
-        self.load_btn.grid(row=13, column=0, sticky="ew", pady=4)
+        self.load_btn.grid(row=14, column=0, sticky="ew", pady=4)
 
         self.exit_btn = ttk.Button(self.panel_card, text="Exit", bootstyle="danger", command=self.app.destroy)
-        self.exit_btn.grid(row=14, column=0, sticky="ew", pady=(16, 0))
-
+        self.exit_btn.grid(row=15, column=0, sticky="ew", pady=(16, 0))
+    def on_undo(self) -> None:
+        """Handle undo button click."""
+        if self.logic.level1_completed and self.logic.level == 2:
+            # Check if we're at the beginning of Level 2 history
+            if len(self.logic.move_history) <= 1:
+                Messagebox.show_info(
+                    "Cannot undo", 
+                    "Level 1 is completed and cannot be modified.\n"
+                    "Undo is only available for Level 2 moves.",
+                    parent=self.app
+                )
+                return
+        if not self.logic.can_undo():
+            Messagebox.show_info("Cannot undo", "No moves to undo", parent=self.app)
+            return
+            
+        if Messagebox.yesno("Undo Move", "Undo the last move?", parent=self.app):
+            success = self.logic.undo_last_move()
+            if success:
+                self.selected = None
+                self.value_var.set("")
+                self._refresh_board()
+                self._refresh_panel()
+                Messagebox.show_info("Undo successful", "Last move undone", parent=self.app)
     # ---------- Input handlers ----------
     def on_enter_pressed(self, event):
         self.on_place()
@@ -486,6 +603,7 @@ class InterfaceGUI:
         self.board_card.config(text="Board (Level 1)")
         self._refresh_board()
         self._refresh_panel()
+        
 
     def on_clear_board(self) -> None:
         if self.logic.level == 2:
@@ -514,7 +632,7 @@ class InterfaceGUI:
 
     def start_level2_ui_only(self) -> None:
         """Switch UI into Level 2: show yellow ring + display-only inner 5x5."""
-        self.logic.level = 2
+        self.logic.start_level2()
         self.board_card.config(text="Board (Level 2)")
 
         if self.level2_container is None:
@@ -616,6 +734,13 @@ class InterfaceGUI:
 
         # If loaded Level 1 is complete, auto-advance
         if self.logic.level == 1 and self.logic.is_level1_complete():
+            self.logic.level1_completed = True
+            self.logic.level1_snapshot = {
+                "board": copy.deepcopy(self.logic.board),
+                "score": self.logic.score,
+                "level": 1,
+                "ring": copy.deepcopy(self.logic.ring)
+            }
             Messagebox.show_info(
                 "Loaded game has Level 1 completed. Switching to Level 2.",
                 "Auto-Advance",
