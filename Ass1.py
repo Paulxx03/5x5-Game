@@ -20,7 +20,8 @@ metal_pipe = pygame.mixer.Sound("Sounds/Metal Pipe Falling.wav")
 metal_pipe.set_volume(0.3)
 incorrect_buzzer = pygame.mixer.Sound("Sounds/Incorrect Buzzer.wav")
 incorrect_buzzer.set_volume(0.5)
-
+correct = pygame.mixer.Sound("Sounds/Correct.wav")
+correct.set_volume(0.5)
 
 # -------------------------
 # Styling constants
@@ -697,6 +698,7 @@ class InterfaceGUI:
                 self.value_entry.focus_set()
                 return
 
+            self.logic.play_sound(correct) 
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
@@ -717,9 +719,10 @@ class InterfaceGUI:
             ok = self.logic.place_on_ring_ui_only(self.selected.r, self.selected.c, value)
             if not ok:
                 self.logic.play_sound(incorrect_buzzer)
-                Messagebox.show_warning("Pick an empty yellow ring cell.", "Invalid ring placement")
+                Messagebox.show_info("Pick an empty yellow ring cell.", "Invalid ring placement")
                 return
 
+            self.logic.play_sound(correct) 
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
@@ -829,6 +832,7 @@ class InterfaceGUI:
 
 if __name__ == "__main__":
     InterfaceGUI().run()
+
 
 
 
