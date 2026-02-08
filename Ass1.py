@@ -164,7 +164,10 @@ class Logic:
             return False
             
         # Get the PREVIOUS state (don't pop yet!)
-        action_type, prev_state = self.move_history[-2]  # Use -2 for previous state
+        if self.level == 1:
+            action_type, prev_state = self.move_history[-2]  # Use -2 for previous state
+        else:
+            action_type, prev_state = self.move_history[-1]
         
         # Restore previous state
         self.board = copy.deepcopy(prev_state["board"])
@@ -191,7 +194,9 @@ class Logic:
     def get_next_number(self) -> int:
         board_max = max(max(row) for row in self.board)
         ring_max = max(max(row) for row in self.ring)
-        return max(board_max, ring_max) + 1
+        if board_max == 25:
+            return max(ring_max + 1, 2)
+        return board_max + 1
 
     def find_position(self, target: int) -> tuple[int, int] | None:
         for r in range(5):
@@ -217,12 +222,15 @@ class Logic:
 
         if self.board[r][c] != 0:
             return False
+        
+        pr, pc = prev_pos
+        if abs(r - pr) > 1 or abs(c - pc) > 1:
+            return False
 
         # Make the move FIRST
         self.board[r][c] = value
 
         # Update score if diagonal
-        pr, pc = prev_pos
         if abs(r - pr) == 1 and abs(c - pc) == 1:
             self.score += 1
         
@@ -238,6 +246,9 @@ class Logic:
         return True
 
     def is_level1_complete(self) -> bool:
+        return all(cell != 0 for row in self.board for cell in row)
+    
+    def is_level2_complete(self) -> bool:
         return all(cell != 0 for row in self.board for cell in row)
 
     # Level 2 (UI-only placement for now)
@@ -667,11 +678,12 @@ class InterfaceGUI:
         expected = self.logic.get_next_number()
         if value != expected:
             self.logic.play_sound(incorrect_buzzer)
-            Messagebox.show_warning(
+            Messagebox.show_info(
                 f"Next number must be {expected}.",
                 "Invalid number",
                 parent=self.app,
             )
+            self.value_var.set("")
             self.value_entry.focus_set()
             return
 
@@ -680,11 +692,11 @@ class InterfaceGUI:
             ok = self.logic.make_move_level1(self.selected.r, self.selected.c, value)
             if not ok:
                 self.logic.play_sound(incorrect_buzzer)
-                Messagebox.show_warning("Invalid placement. Try another cell.", "Invalid placement", parent=self.app)
+                Messagebox.show_info("Invalid placement. Try another cell.", "Invalid placement", parent=self.app)
+                self.value_var.set("")
                 self.value_entry.focus_set()
                 return
 
-            self.logic.play_sound(metal_pipe)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
@@ -708,11 +720,18 @@ class InterfaceGUI:
                 Messagebox.show_warning("Pick an empty yellow ring cell.", "Invalid ring placement")
                 return
 
-            self.logic.play_sound(metal_pipe)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
             self.value_entry.focus_set()
+
+            if self.logic.is_level2_complete():
+                completion = self.logic.get_completion_data(parent=self.app)
+                save_data = self.save_state.load_completed_games()
+                save_data.setdefault("Players", {})
+                save_data["Players"].setdefault(completion["Name"], [])
+                save_data["Players"][completion["Name"]].append(completion)
+                self.save_state.save_completed_game(save_data)
             return
 
         self.logic.play_sound(incorrect_buzzer)
@@ -810,5 +829,6 @@ class InterfaceGUI:
 
 if __name__ == "__main__":
     InterfaceGUI().run()
+
 
 
