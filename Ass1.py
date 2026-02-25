@@ -4,6 +4,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 import ttkbootstrap as ttk
+from ttkbootstrap.widgets import ToastNotification
 from ttkbootstrap.dialogs import Messagebox
 
 import pygame
@@ -11,16 +12,24 @@ from tkinter import simpledialog
 import copy
 from typing import List, Tuple
 
+import sys, os
+
 
 # -------------------------
 # Sound Effects
 # -------------------------
+
+def resource_path(relative_path):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
 pygame.mixer.init()
-metal_pipe = pygame.mixer.Sound("Sounds/Metal Pipe Falling.wav")
+metal_pipe = pygame.mixer.Sound(resource_path("Sounds/Metal Pipe Falling.wav"))
 metal_pipe.set_volume(0.3)
-incorrect_buzzer = pygame.mixer.Sound("Sounds/Incorrect Buzzer.wav")
+incorrect_buzzer = pygame.mixer.Sound(resource_path("Sounds/Incorrect Buzzer.wav"))
 incorrect_buzzer.set_volume(0.5)
-correct = pygame.mixer.Sound("Sounds/Correct.wav")
+correct = pygame.mixer.Sound(resource_path("Sounds/Correct.wav"))
 correct.set_volume(0.5)
 
 # -------------------------
@@ -72,6 +81,8 @@ class Logic:
         self.score = 0
         self.level = 1
         self.player_name = None
+        self.correct_moves = 0
+        self.invalid_moves = 0
 
         # Level 2 ring values (7x7, ring cells used; 0 = empty)
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
@@ -79,6 +90,93 @@ class Logic:
         self.MAX_UNDO_HISTORY = 50
         self.level1_completed = False
         self.level1_snapshot = None
+        self.level2_completed = False
+        self.level2_available_positions = {}  
+        self.current_outer_number = 2  
+    def get_placed_outer_numbers(self) -> List[int]:
+        """Get list of numbers already placed in outer ring"""
+        placed = []
+        for r in range(7):
+            for c in range(7):
+                if self.is_ring_cell(r, c) and self.ring[r][c] != 0:
+                    placed.append(self.ring[r][c])
+        return placed
+    def _find_position_inner(self, number: int) -> Tuple[int, int] | None:
+        """Find position of a number in the inner 5x5 board"""
+        for r in range(5):
+            for c in range(5):
+                if self.board[r][c] == number:
+                    return (r, c)
+        return None
+    
+    def _is_on_main_diagonal(self, r: int, c: int) -> bool:
+        """Check if position is on main diagonal (r == c)"""
+        return r == c
+    
+    def _is_on_anti_diagonal(self, r: int, c: int) -> bool:
+        """Check if position is on anti-diagonal (r + c == 4) for 5x5 board"""
+        return r + c == 4
+    
+    def _get_available_positions_for_number(self, number: int) -> List[Tuple[int, int]]:
+        """Get available outer ring positions for a specific number based on rules"""
+        if number > 25 or number < 2:
+            return []
+        
+        # Find the inner board position of this number
+        inner_pos = self._find_position_inner(number)
+        if not inner_pos:
+            return []
+        
+        r, c = inner_pos
+        available_positions = []
+        
+        # Convert inner 5x5 coordinates (0-4) to outer 7x7 coordinates
+        outer_r = r + 1  # Inner rows 0-4 become outer rows 1-5
+        outer_c = c + 1  # Inner cols 0-4 become outer cols 1-5
+        
+        # Rule 3: Blue cells - ends of the row and column
+        # Top end of column (row 0, same column)
+        if self.ring[0][outer_c] == 0:
+            available_positions.append((0, outer_c))
+        
+        # Bottom end of column (row 6, same column)
+        if self.ring[6][outer_c] == 0:
+            available_positions.append((6, outer_c))
+        
+        # Left end of row (same row, column 0)
+        if self.ring[outer_r][0] == 0:
+            available_positions.append((outer_r, 0))
+        
+        # Right end of row (same row, column 6)
+        if self.ring[outer_r][6] == 0:
+            available_positions.append((outer_r, 6))
+        
+        # Rule 4: Yellow cells - diagonal ends (only for numbers on main diagonals)
+        # Check if the number is on either of the two longest diagonals
+        on_main = self._is_on_main_diagonal(r, c)
+        on_anti = self._is_on_anti_diagonal(r, c)
+        
+        if on_main:
+            # Top-left diagonal end
+            if (r, c) == (0, 0):  # Top-left corner
+                if self.ring[0][0] == 0:
+                    available_positions.append((0, 0))
+            # Bottom-right diagonal end
+            if (r, c) == (4, 4):  # Bottom-right corner
+                if self.ring[6][6] == 0:
+                    available_positions.append((6, 6))
+        
+        if on_anti:
+            # Top-right diagonal end
+            if (r, c) == (0, 4):  # Top-right corner
+                if self.ring[0][6] == 0:
+                    available_positions.append((0, 6))
+            # Bottom-left diagonal end
+            if (r, c) == (4, 0):  # Bottom-left corner
+                if self.ring[6][0] == 0:
+                    available_positions.append((6, 0))
+        
+        return available_positions
     def start_level2(self) -> None:
         """Called when transitioning from Level 1 to Level 2"""
         self.level1_completed = True
@@ -92,7 +190,13 @@ class Logic:
         self.move_history.clear()
         # Save initial Level 2 state
         self._save_to_history("level2_initial")
-        self.level = 2  
+        self.level = 2
+        self.correct_moves = 0
+        self.invalid_moves = 0
+        self.current_outer_number = 2 
+        self.level2_completed = False  
+        
+        self._calculate_all_available_positions()  
 
     def reset_new_game_level1(self) -> None:
         """Clear board; place 1 randomly. Reset Level 2 ring too."""
@@ -107,6 +211,8 @@ class Logic:
         self._save_to_history("initial")
         self.level1_completed = False
         self.level1_snapshot = None
+        self.correct_moves = 0
+        self.invalid_moves = 0
 
     def clear_level1_keep_one(self) -> None:
         """Clear board but keep 1 in its current cell."""
@@ -193,11 +299,14 @@ class Logic:
         return max(max(row) for row in self.board)
 
     def get_next_number(self) -> int:
-        board_max = max(max(row) for row in self.board)
-        ring_max = max(max(row) for row in self.ring)
-        if board_max == 25:
-            return max(ring_max + 1, 2)
-        return board_max + 1
+        if self.level == 1:
+            board_max = max(max(row) for row in self.board)
+            if board_max == 25:
+                return max(max(row) for row in self.ring) + 1 if any(any(row) for row in self.ring) else 2
+            return board_max + 1
+        else:
+            # Level 2: No next number - show 0 or -1
+            return -1
 
     def find_position(self, target: int) -> tuple[int, int] | None:
         for r in range(5):
@@ -208,6 +317,8 @@ class Logic:
     
     def play_sound(self, sound):
       sound.play()
+
+    
 
     def make_move_level1(self, r: int, c: int, value: int) -> bool:
         if not (0 <= r < 5 and 0 <= c < 5):
@@ -243,14 +354,23 @@ class Logic:
             "ring": copy.deepcopy(self.ring)
         }
         self._save_to_history("move", post_move_state)  # ✅ SAVE NEW STATE
-        
+        self.correct_moves += 1
+
         return True
 
     def is_level1_complete(self) -> bool:
         return all(cell != 0 for row in self.board for cell in row)
     
     def is_level2_complete(self) -> bool:
-        return all(cell != 0 for row in self.board for cell in row)
+        """Check if all outer ring cells (24 cells) are filled"""
+        placed_count = 0
+        for r in range(7):
+            for c in range(7):
+                if self.is_ring_cell(r, c) and self.ring[r][c] != 0:
+                    placed_count += 1
+        
+        # There are 24 outer ring cells (top/bottom: 5+5=10, left/right: 5+5=10, minus 4 corners counted twice)
+        return placed_count == 24
 
     # Level 2 (UI-only placement for now)
     @staticmethod
@@ -268,21 +388,39 @@ class Logic:
         if not self.ring_cell_empty(r, c):
             return False
         
+        if value in self.get_placed_outer_numbers():
+            return False
+        
+        # Check if this placement follows Level 2 rules
+        available_positions = self.level2_available_positions.get(value, [])
+        if (r, c) not in available_positions:
+            return False
+        
         # Save PRE-MOVE state
         pre_move_state = {
             "board": copy.deepcopy(self.board),
             "score": self.score,
             "level": self.level,
-            "ring": copy.deepcopy(self.ring)  # Current ring BEFORE placement
+            "ring": copy.deepcopy(self.ring),
+            "level2_available_positions": copy.deepcopy(self.level2_available_positions),  # <-- ADD THIS
+            "current_outer_number": self.current_outer_number  # <-- ADD THIS
         }
         self._save_to_history("ring_move", pre_move_state)
         
         # Now place the number
         self.ring[r][c] = value
+        self.correct_moves += 1
+        
+        # Recalculate available positions for all remaining numbers
+        self._calculate_all_available_positions()
+        
         return True
-
     def clear_ring(self) -> None:
         self.ring = [[0 for _ in range(7)] for _ in range(7)]
+        self.current_outer_number = 2  
+        self._calculate_all_available_positions()  
+
+    
 
     def get_state(self) -> dict:
         return {
@@ -291,7 +429,10 @@ class Logic:
             "level": self.level,
             "ring": self.ring,
             "level1_completed": self.level1_completed,
-            "level1_snapshot": self.level1_snapshot
+            "level1_snapshot": self.level1_snapshot,
+            "level2_available_positions": self.level2_available_positions,  
+            "current_outer_number": self.current_outer_number,  
+            "level2_completed": self.level2_completed  
         }
 
     def set_state(self, state: dict) -> None:
@@ -301,8 +442,11 @@ class Logic:
         self.ring = state.get("ring", [[0 for _ in range(7)] for _ in range(7)])
         self.level1_completed = state.get("level1_completed", False)
         self.level1_snapshot = state.get("level1_snapshot", None)
+        self.level2_available_positions = state.get("level2_available_positions", {})  # <-- ADD THIS
+        self.current_outer_number = state.get("current_outer_number", 2)  # <-- ADD THIS
+        self.level2_completed = state.get("level2_completed", False)  # <-- ADD THIS
 
-    def get_completion_data(self, parent) -> dict:
+    def get_completion_data(self, elapsed_time, parent) -> dict:
 
         while not self.player_name:
             name = simpledialog.askstring("Level Complete", "Level 1 complete!\n\nEnter your name to save your score and continue:", parent=parent)
@@ -311,13 +455,15 @@ class Logic:
             else:
                 self.player_name = name.strip()
             
-        now = datetime.now()
-        formatted_time = now.strftime("%A %m/%d/%Y %I:%M %p")
+        formatted_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         state = self.get_state()
 
         completion_data = {
             "Name" : self.player_name,
-            "Time" : formatted_time,
+            "Completed At" : formatted_time,
+            "Completion Seconds": elapsed_time,
+            "Correct Moves": self.correct_moves,
+            "Invalid Moves": self.invalid_moves,
             "Game Level" : state["level"],
             "Score" : state["score"],
             "Board" : state["board"],
@@ -325,6 +471,30 @@ class Logic:
         }
 
         return completion_data
+    
+    def is_personal_best(self, data, player_name, current_time_seconds, level):
+
+        players = data.get("Players", {})
+        player_games = players.get(player_name, [])
+
+        previous_times = [
+            game["Completion Seconds"]
+            for game in player_games
+            if game.get("Game Level") == level
+        ]
+
+        if not previous_times:
+            return False
+
+        return current_time_seconds < min(previous_times)
+
+    def _calculate_all_available_positions(self) -> None:
+        """Calculate available outer ring positions for numbers 2-25"""
+        self.level2_available_positions = {}
+        
+        for num in range(2, 26):
+            positions = self._get_available_positions_for_number(num)
+            self.level2_available_positions[num] = positions
 
 
 # -------------------------
@@ -350,6 +520,11 @@ class InterfaceGUI:
         )
 
         self.style = ttk.Style()
+
+        self.level1_start_time = None
+        self.level2_start_time = None
+        self.level1_duration = None
+        self.level2_duration = None
 
         # Inner (Level 1 buttons): big white
         self.style.configure("InnerCell.TButton", font=CELL_FONT_INNER, foreground="white")
@@ -423,6 +598,7 @@ class InterfaceGUI:
 
         # Start game
         self.new_game_level1()
+        self.level1_start_time = datetime.now()
 
     # ---------- Build UI ----------
     def _build_inner_grid(self) -> None:
@@ -553,8 +729,11 @@ class InterfaceGUI:
         self.load_btn = ttk.Button(self.panel_card, text="Load", bootstyle="secondary", command=self.on_load)
         self.load_btn.grid(row=14, column=0, sticky="ew", pady=4)
 
+        self.load_btn = ttk.Button(self.panel_card, text="Judge Statistics", bootstyle="secondary", command=self.show_judge_statistics)
+        self.load_btn.grid(row=15, column=0, sticky="ew", pady=4)
+
         self.exit_btn = ttk.Button(self.panel_card, text="Exit", bootstyle="danger", command=self.app.destroy)
-        self.exit_btn.grid(row=15, column=0, sticky="ew", pady=(16, 0))
+        self.exit_btn.grid(row=16, column=0, sticky="ew", pady=(16, 0))
     def on_undo(self) -> None:
         """Handle undo button click."""
         if self.logic.level1_completed and self.logic.level == 2:
@@ -610,12 +789,12 @@ class InterfaceGUI:
         self.inner_frame.grid(row=0, column=0, sticky="nsew")
 
         self.logic.reset_new_game_level1()
+        self.level1_start_time = datetime.now()
         self.selected = None
         self.value_var.set("")
         self.board_card.config(text="Board (Level 1)")
         self._refresh_board()
         self._refresh_panel()
-        
 
     def on_clear_board(self) -> None:
         if self.logic.level == 2:
@@ -643,6 +822,7 @@ class InterfaceGUI:
         self._refresh_panel()
 
     def start_level2_ui_only(self) -> None:
+        self.level2_start_time = datetime.now() 
         """Switch UI into Level 2: show yellow ring + display-only inner 5x5."""
         self.logic.start_level2()
         self.board_card.config(text="Board (Level 2)")
@@ -676,37 +856,76 @@ class InterfaceGUI:
             Messagebox.show_warning("Please enter a whole number.", "Invalid input")
             return
 
-        expected = self.logic.get_next_number()
-        if value != expected:
-            self.logic.play_sound(incorrect_buzzer)
-            Messagebox.show_info(
-                f"Next number must be {expected}.",
-                "Invalid number",
-                parent=self.app,
-            )
-            self.value_var.set("")
-            self.value_entry.focus_set()
-            return
+        
+        if self.logic.level == 1:
+            expected = self.logic.get_next_number()
+            if value != expected:
+                self.logic.invalid_moves += 1
+                self.logic.play_sound(incorrect_buzzer)
+                Messagebox.show_info(
+                    f"Next number must be {expected}.",
+                    "Invalid number",
+                    parent=self.app,
+                )
+                self.value_var.set("")
+                self.value_entry.focus_set()
+                return
+
+        if self.logic.level == 2:
+            if value < 2 or value > 25:
+                self.logic.play_sound(incorrect_buzzer)
+                Messagebox.show_info(
+                    "Level 2 numbers must be between 2 and 25.",
+                    "Invalid number",
+                    parent=self.app,
+                )
+                self.value_var.set("")
+                self.value_entry.focus_set()
+                return
+            
+            # Check if number already placed
+            if value in self.logic.get_placed_outer_numbers():
+                self.logic.play_sound(incorrect_buzzer)
+                Messagebox.show_info(
+                    f"Number {value} is already placed in the outer ring.",
+                    "Number already placed",
+                    parent=self.app,
+                )
+                self.value_var.set("")
+                self.value_entry.focus_set()
+                return
 
         # Level 1 placement
         if self.logic.level == 1 and self.selected.area == "inner":
             ok = self.logic.make_move_level1(self.selected.r, self.selected.c, value)
             if not ok:
-                self.logic.play_sound(incorrect_buzzer)
+                self.logic.play_sound(incorrect_buzzer) 
                 Messagebox.show_info("Invalid placement. Try another cell.", "Invalid placement", parent=self.app)
                 self.value_var.set("")
                 self.value_entry.focus_set()
                 return
-
-            self.logic.play_sound(correct) 
+            self.logic.play_sound(correct)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
             self.value_entry.focus_set()
 
             if self.logic.is_level1_complete():
-                completion = self.logic.get_completion_data(parent=self.app)
+                self.level1_end_time = datetime.now() 
+                self.level1_duration = round((self.level1_end_time - self.level1_start_time).total_seconds(), 2) 
+                data = self.save_state.load_completed_games()
+                completion = self.logic.get_completion_data(self.level1_duration, parent=self.app)
                 save_data = self.save_state.load_completed_games()
+
+                if (self.logic.is_personal_best(data, self.logic.player_name, self.level1_duration, level = 1)):
+                    toast = ToastNotification(
+                        title="Personal Best!",
+                        message=f"{self.logic.player_name}, you earned new fastest time of {self.level1_duration}s!",
+                        duration=6000,
+                        bootstyle="success"
+                    )
+                    toast.show_toast()
+                
                 save_data.setdefault("Players", {})
                 save_data["Players"].setdefault(completion["Name"], [])
                 save_data["Players"][completion["Name"]].append(completion)
@@ -718,28 +937,40 @@ class InterfaceGUI:
         if self.logic.level == 2 and self.selected.area == "ring":
             ok = self.logic.place_on_ring_ui_only(self.selected.r, self.selected.c, value)
             if not ok:
+                self.logic.invalid_moves += 1
                 self.logic.play_sound(incorrect_buzzer)
                 Messagebox.show_info("Pick an empty yellow ring cell.", "Invalid ring placement")
                 return
-
-            self.logic.play_sound(correct) 
+            self.logic.play_sound(correct)
             self.value_var.set("")
             self._refresh_board()
             self._refresh_panel()
             self.value_entry.focus_set()
 
             if self.logic.is_level2_complete():
-                completion = self.logic.get_completion_data(parent=self.app)
+                self.level2_end_time = datetime.now() 
+                self.level2_duration = round((self.level2_end_time - self.level2_start_time).total_seconds(), 2) 
+                completion = self.logic.get_completion_data(self.level2_duration, parent=self.app)
                 save_data = self.save_state.load_completed_games()
+
+
+                if (self.logic.is_personal_best(save_data, self.logic.player_name, self.level2_duration, level = 2)):
+                    toast = ToastNotification(
+                        title="Personal Best!",
+                        message=f"{self.logic.player_name}, you earned new fastest time of {self.level2_duration}s!",
+                        duration=6000,
+                        bootstyle="success"
+                    )
+                    toast.show_toast()
+
                 save_data.setdefault("Players", {})
                 save_data["Players"].setdefault(completion["Name"], [])
                 save_data["Players"][completion["Name"]].append(completion)
                 self.save_state.save_completed_game(save_data)
             return
-
+        
         self.logic.play_sound(incorrect_buzzer)
         Messagebox.show_warning("Select a valid cell for the current level.", "Wrong cell")
-
     def on_save(self) -> None:
         self.save_state.save_game(self.logic.get_state())
         Messagebox.show_info("Game saved to SavedState.json", "Saved")
@@ -784,6 +1015,39 @@ class InterfaceGUI:
         self._refresh_board()
         self._refresh_panel()
 
+    def show_judge_statistics(self) -> None:
+        data = self.save_state.load_completed_games()
+        players = data.get("Players", {})
+
+        if not players:
+            Messagebox.show_info("No completed games found.", "Stats")
+            return
+
+        report = ""
+
+        for player, games in players.items():
+            total_games = len(games)
+
+            avg_time = sum(g["Completion Seconds"] for g in games) / total_games
+            avg_score = sum(g["Score"] for g in games) / total_games
+
+            total_correct = sum(g.get("Correct Moves", 0) for g in games)
+            total_invalid = sum(g.get("Invalid Moves", 0) for g in games)
+
+            total_attempts = total_correct + total_invalid
+            accuracy = (total_correct / total_attempts * 100) if total_attempts > 0 else 0
+
+            report += (
+                f"\nPlayer: {player}\n"
+                f"Games Played: {total_games}\n"
+                f"Average Time: {round(avg_time, 2)}s\n"
+                f"Average Score: {round(avg_score, 2)}\n"
+                f"Accuracy: {round(accuracy, 2)}%\n"
+                f"{'-'*30}\n"
+            )
+
+        Messagebox.show_info(report, "Judge Statistics")
+
     # ---------- Refresh ----------
     def _refresh_board(self) -> None:
         # Level 1 inner buttons
@@ -824,7 +1088,17 @@ class InterfaceGUI:
             self.selected_label.config(text=f"{self.selected.area} ({self.selected.r}, {self.selected.c})")
 
         self.score_label.config(text=str(self.logic.score))
-        self.next_number_label.config(text=str(self.logic.get_next_number()))
+        
+        # Show next number for Level 1, different message for Level 2
+        next_num = self.logic.get_next_number()
+        if self.logic.level == 1:
+            if next_num == 26:  # All numbers placed
+                self.next_number_label.config(text="Complete")
+            else:
+                self.next_number_label.config(text=str(next_num))
+        else:
+            # Level 2: Show "Any 2-25" or "—"
+            self.next_number_label.config(text="Any 2-25")
 
     def run(self) -> None:
         self.app.mainloop()
@@ -832,7 +1106,6 @@ class InterfaceGUI:
 
 if __name__ == "__main__":
     InterfaceGUI().run()
-
 
 
 
