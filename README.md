@@ -11,3 +11,7 @@ Gameplay updates:
 - A "Next Number" panel shows the required next value and invalid numbers are rejected with a warning.
 - Accepted placements play a confirmation sound; invalid placements play a buzzer.
 - A "Clear Board" control lets you restart at any time. In Level 1 you can keep the original 1 in place or randomize it; in Level 2 only the outer ring is cleared.
+
+Listed below are user stories 15 & 16:
+As a player i want to be notified when i recieve my fastest time so that i know when i am improving at the game
+As a judge i want the game to keep track of additional statistics (avg level completion time, accuracy, and score avg) so that i can compare performance between multiple players
